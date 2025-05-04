@@ -1,0 +1,10 @@
+# Core dependencies for BLE audio transcription
+openai-whisper==20231117
+torch>=2.1.0  # For Whisper backend
+bleak>=0.21.1  # For BLE communication
+opuslib>=3.0.1  # For audio decoding
+webrtcvad>=2.0.10  # For voice activity detection
+numpy>=1.24.0  # For audio processing
+
+# Note: asyncio is part of Python standard library
+# This file was generated

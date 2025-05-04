@@ -1,0 +1,5 @@
+recordings/
+.venv/
+devkit/
+transcription.txt
+ble_client.py
