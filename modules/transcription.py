@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Transcription module for the Omi BLE Audio project.
-Handles speech detection, VAD, and transcription using Whisper.
+Handles speech detection, VAD, and transcription using NVIDIA Parakeet TDT model.
 """
 
 import os
@@ -10,11 +10,26 @@ import time
 import threading
 import warnings
 import numpy as np
-import whisper
+import soundfile as sf
+import tempfile
+import nemo.collections.asr as nemo_asr
 import webrtcvad
 from datetime import datetime
 from queue import Queue
 from pathlib import Path
+import logging
+from tqdm import tqdm
+from collections import deque
+import re
+
+# Reduce Nemo verbosity and tqdm progress bars
+os.environ["NEMO_LOG_LEVEL"] = "ERROR"
+for _name in ("nemo", "nemo_logging"):
+    logging.getLogger(_name).setLevel(logging.CRITICAL + 1)
+# Disable all logs globally except CRITICAL
+logging.disable(logging.CRITICAL)
+tqdm.write = lambda *args, **kwargs: None  # Disable tqdm output
+tqdm.tqdm = lambda *args, **kwargs: args[0]  # Disable progress bar completely
 
 # Audio settings
 SAMPLE_RATE = 16000  # Hz
@@ -26,7 +41,7 @@ FRAME_DURATION_MS = 10  # webrtcvad frame size must be 10/20/30 ms
 BYTES_PER_SAMPLE = SAMPLE_WIDTH  # 2 bytes for 16-bit audio
 FRAME_BYTES = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000) * BYTES_PER_SAMPLE  # 320 bytes
 SILENCE_THRESHOLD_FRAMES = 20  # flush if this many frames of silence observed (~600 ms)
-MAX_BUFFER_SECONDS = 30.0  # flush if buffer exceeds this duration (match Whisper's window)
+MAX_BUFFER_SECONDS = 30.0  # flush if buffer exceeds this duration (match NVIDIA Parakeet's window)
 OVERLAP_SECONDS = 0.0  # no overlap to prevent duplicate segments
 
 # Create recordings directory if it doesn't exist
@@ -36,18 +51,18 @@ RECORDINGS_DIR.mkdir(exist_ok=True)
 
 class Transcriber:
     """
-    Handles speech-to-text transcription with Whisper.
+    Handles speech-to-text transcription with NVIDIA Parakeet TDT model.
     Uses a dedicated background thread to process audio segments.
     """
-    
+
     SUPPRESSION_PHRASES = [
         "thank you", "thanks for", "subscribe", "for watching",
         "see you", "next video", "視聴", "ご視聴", "opening theme",
     ]
     GARBAGE_LINES = [
-        "a", "aa", "ah", "ha", "h", "uh", "oh", "mmm", "mm", "hm",
+        "a", "aa", "ah", "ha", "h", "uh", "oh", "mmm", "mm", "hm", "okay"
     ]
-    # Optimal logprob threshold for Whisper confidence; filter out repetitions/garbage
+    # Optimal logprob threshold for NVIDIA Parakeet confidence; filter out repetitions/garbage
     AVG_LOGPROB_THRESHOLD = -1.1  # Balanced: allows valid speech, filters most junk
     COMPRESSION_RATIO_THRESHOLD = 2.4
     NO_SPEECH_THRESHOLD = 0.6
@@ -61,9 +76,9 @@ class Transcriber:
         is_apple_silicon = (platform.system() == "Darwin" and platform.machine() == "arm64")
 
         if is_apple_silicon:
-            # Apple Silicon: Use CPU for maximum compatibility (MPS backend is not fully supported by Whisper)
+            # Apple Silicon: Use CPU for maximum compatibility (MPS backend is not fully supported by NVIDIA Parakeet)
             device = "cpu"
-            print("[INFO] Apple Silicon detected. Forcing Whisper to use CPU for compatibility.")
+            print("[INFO] Apple Silicon detected. Running ASR model on CPU for compatibility.")
         else:
             # Non-Apple Silicon: Use CUDA if available, else CPU
             try:
@@ -73,11 +88,20 @@ class Transcriber:
                 device = "cpu"
             print(f"[INFO] Non-Apple Silicon detected. Using device: {device}")
 
-        self.model = whisper.load_model("large-v3-turbo", device=device)
+        # Load NVIDIA Parakeet TDT model (English, fast, accurate)
+        self.model = nemo_asr.models.ASRModel.from_pretrained("nvidia/parakeet-tdt-0.6b-v2")
+        # Ensure model runs on desired device (CPU or MPS). Parakeet runs fp32 on CPU fine.
+        if device != "cpu":
+            try:
+                self.model = self.model.to(device)
+            except Exception:
+                print("[WARN] Could not move model to device, falling back to CPU")
+
         self.queue = Queue()
         self.running = True
         self.last_printed = ""
         self.previous_text = ""
+        self.recent_texts = deque(maxlen=10)  # track recent utterances to avoid duplicates
         self.thread = threading.Thread(target=self._process_queue)
         self.thread.start()
 
@@ -148,59 +172,54 @@ class Transcriber:
                 else:
                     audio_np, start_time, context = item, time.time(), None
 
-                # Transcribe with fallback temperatures
-                result = None
-                temperatures = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-
-                for temp in temperatures:
+                # Write audio to a temporary WAV file (16kHz mono)
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp_wav:
+                    sf.write(tmp_wav.name, audio_np, SAMPLE_RATE)
                     try:
-                        result = self.model.transcribe(
-                            audio_np,
-                            language="en",
-                            word_timestamps=True,
-                            temperature=temp,
-                            initial_prompt=context,
-                            condition_on_previous_text=bool(self.previous_text),
-                            compression_ratio_threshold=self.COMPRESSION_RATIO_THRESHOLD,
-                            logprob_threshold=self.AVG_LOGPROB_THRESHOLD,
-                            no_speech_threshold=self.NO_SPEECH_THRESHOLD
-                        )
-
-                        # Check if result is good enough
-                        if not self._needs_retry(result):
-                            break
-
+                        trans_results = self.model.transcribe([tmp_wav.name], timestamps=True, verbose=False)
                     except Exception as e:
-                        print(f"Error at temperature {temp}: {e}")
+                        logging.error(f"Transcription error: {e}")
+                        self.queue.task_done()
+                        continue
 
-                if not result:
+                if not trans_results:
                     self.queue.task_done()
                     continue
 
-                # Process the result
-                joined = result["text"].strip()
+                # Parakeet returns list of Hypothesis or strings
+                hyp = trans_results[0]
+                joined = hyp.text if hasattr(hyp, 'text') else str(hyp)
 
                 if joined and not self._should_skip(joined):
-                    if result["segments"]:
-                        logprob = result['segments'][0]['avg_logprob']
-                        conf = math.exp(logprob)
-                        conf_str = f"[CONFIDENCE] avg_logprob={logprob:.2f} (exp={conf:.2f}) | {joined}"
-                        # Filter: skip if confidence is too low
-                        if logprob < self.AVG_LOGPROB_THRESHOLD:
-                            print(f"[DEBUG] Low confidence: {conf_str}")
-                            joined = ""
-                    else:
-                        conf_str = f"[CONFIDENCE] avg_logprob=N/A | {joined}"
+                    # For Parakeet, use hypothesis.score as confidence
+                    conf_score = getattr(hyp, 'score', 0.0)
+                    # Simple confidence filter: skip if score (neg logprob) < -1.0
+                    if conf_score < -1.0:
+                        self.queue.task_done()
+                        continue
 
-                    if joined and joined != self.last_printed:
-                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        latency = f" (latency: {time.time()-start_time:.2f}s)" if start_time else ""
-                        with open("transcription.txt", "a", encoding="utf-8") as f:
-                            f.write(f"[{timestamp}] {conf_str}\n")
-                        print(conf_str)
-                        print(f"{joined}{latency}")
-                        self.last_printed = joined
-                        self.previous_text = joined
+                    # Filter out single-word utterances (<=1 non-filler word)
+                    if len(re.findall(r"[a-zA-Z]+", joined)) < 2:
+                        self.queue.task_done()
+                        continue
+
+                    # Deduplicate: normalize and check against recent_texts
+                    norm = re.sub(r"[^a-zA-Z]+", " ", joined.lower()).strip()
+                    if norm in self.recent_texts:
+                        self.queue.task_done()
+                        continue
+                    self.recent_texts.append(norm)
+
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    line = f"[{timestamp}] score={conf_score:.2f} latency={time.time()-start_time:.2f}s | {joined}"
+                    print(line)
+                    with open("transcription.txt", "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                    self.last_printed = joined
+                    self.previous_text = joined
+                    # Clear queue to avoid backlog duplicates
+                    with self.queue.mutex:
+                        self.queue.queue.clear()
 
                 self.queue.task_done()
 
@@ -224,7 +243,7 @@ class Transcriber:
 
 class SpeechDetector:
     """Detect speech in audio using WebRTC VAD."""
-    
+
     def __init__(self, transcriber: Transcriber):
         self.transcriber = transcriber
         self.vad = webrtcvad.Vad(3)  # Aggressiveness level 3 (most aggressive)
@@ -253,7 +272,7 @@ class SpeechDetector:
 
         # Convert to numpy and send to transcriber
         audio_np = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        print(f"[DEBUG] Speech segment captured ({len(audio_np)/SAMPLE_RATE:.2f}s), sending to transcriber at {datetime.now().strftime('%H:%M:%S')}")
+        logging.debug(f"Speech segment captured ({len(audio_np)/SAMPLE_RATE:.2f}s), sending to transcriber.")
 
         # Pass audio with context to transcriber
         self.transcriber.add_audio((audio_np, time.time()), self.context)

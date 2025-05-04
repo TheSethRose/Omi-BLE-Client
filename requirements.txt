@@ -1,10 +1,12 @@
 # Core dependencies for BLE audio transcription
-openai-whisper==20231117
-torch>=2.1.0  # For Whisper backend
+nemo_toolkit[asr]>=2.2.1  # For NVIDIA Parakeet TDT
+torch>=2.1.0  # ML backend
+numpy<2.0.0  # For NeMo compatibility
+soundfile>=0.13.1  # For audio file handling
 bleak>=0.21.1  # For BLE communication
 opuslib>=3.0.1  # For audio decoding
 webrtcvad>=2.0.10  # For voice activity detection
-numpy>=1.24.0  # For audio processing
+tqdm>=4.67.1  # For progress bars (disabled but required by NeMo)
 
 # Note: asyncio is part of Python standard library
-# This file was generated
+# This file was generated automatically

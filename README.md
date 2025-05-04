@@ -1,13 +1,14 @@
 # Omi BLE Audio Transcription Pipeline
 
-Real-time, hands-free audio transcription using the Omi Dev Kit and OpenAI's Whisper model. Stream room audio wirelessly via Bluetooth Low Energy (BLE) for instant speech-to-text conversion.
+Real-time, hands-free audio transcription using the Omi Dev Kit and NVIDIA Parakeet TDT. Stream room audio wirelessly via Bluetooth Low Energy (BLE) for instant speech-to-text conversion.
 
 ## Features
 
 - **Real-time BLE Audio Streaming**: Capture audio from Omi Dev Kit over Bluetooth Low Energy
-- **High-Quality Transcription**: Uses OpenAI's Whisper large-v3-turbo model
+- **High-Quality Transcription**: Uses NVIDIA Parakeet TDT 0.6B v2 model
 - **Voice Activity Detection**: Smart speech segmentation using WebRTC VAD
-- **Confidence Filtering**: Intelligent filtering based on Whisper's confidence scores
+- **Confidence Filtering**: Intelligent filtering based on transcription confidence scores
+- **Duplicate Prevention**: Removes duplicate transcriptions
 - **Low Latency**: Optimized for real-time transcription with minimal delay
 - **Privacy-First**: All processing happens locally on your device
 
@@ -45,11 +46,11 @@ The pipeline is organized into modular components:
 
 - **main.py**: Entry point and application orchestration
 - **modules/bluetooth.py**: BLE device discovery and audio capture
-- **modules/transcription.py**: Speech detection and Whisper transcription
+- **modules/transcription.py**: Speech detection and NVIDIA Parakeet TDT transcription
 
 ## Performance Notes
 
-- Apple Silicon Macs: Uses CPU for maximum Whisper compatibility
+- Apple Silicon Macs: Uses CPU for maximum compatibility
 - NVIDIA GPUs: Automatically uses CUDA for faster processing
 - Other platforms: Falls back to CPU with optimized settings
 
@@ -60,5 +61,5 @@ MIT
 ## Credits
 
 - Omi Dev Kit by [BasedHardware](https://github.com/BasedHardware/omi)
-- OpenAI Whisper for transcription
+- NVIDIA Parakeet TDT for transcription
 - WebRTC VAD for voice detection

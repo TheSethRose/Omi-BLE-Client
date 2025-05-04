@@ -12,8 +12,8 @@ from modules.bluetooth import discover_ble_devices, connect_to_device
 
 
 async def run():
-    """Entry-point: connect to BLE device and stream speech to Whisper."""
-    print("Loading Whisper model…")
+    """Entry-point: connect to BLE device and stream speech to NVIDIA Parakeet."""
+    print("Loading NVIDIA Parakeet model…")
     transcriber = Transcriber()
     detector = SpeechDetector(transcriber)
 
@@ -22,7 +22,7 @@ async def run():
         device = await discover_ble_devices()
         if not device:
             return
-        
+
         # Connect to device and start audio streaming
         await connect_to_device(device, detector)
     finally:
