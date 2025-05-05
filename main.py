@@ -7,14 +7,31 @@ Connects to a Friend BLE device, captures audio, and performs real-time transcri
 """
 
 import asyncio
+import uuid
+import os
+import sys
 from modules.transcription import Transcriber, SpeechDetector
 from modules.bluetooth import discover_ble_devices, connect_to_device
+from modules.database import Database
 
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
 
 async def run():
     """Entry-point: connect to BLE device and stream speech to NVIDIA Parakeet."""
     print("Loading NVIDIA Parakeet model…")
-    transcriber = Transcriber()
+    try:
+        db = Database(DATABASE_URL)
+        print("Connected to PostgreSQL database")
+    except Exception as e:
+        print(f"Error connecting to database: {e}")
+        return
+
+    def on_transcription(text, meta):
+        # Store each utterance with a unique ID
+        rec_id = str(uuid.uuid4())
+        db.create("utterances", id=rec_id, document=text, metadata=meta)
+
+    transcriber = Transcriber(on_transcription=on_transcription)
     detector = SpeechDetector(transcriber)
 
     try:

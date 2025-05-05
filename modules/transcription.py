@@ -21,6 +21,7 @@ import logging
 from tqdm import tqdm
 from collections import deque
 import re
+import uuid
 
 # Reduce Nemo verbosity and tqdm progress bars
 os.environ["NEMO_LOG_LEVEL"] = "ERROR"
@@ -67,7 +68,7 @@ class Transcriber:
     COMPRESSION_RATIO_THRESHOLD = 2.4
     NO_SPEECH_THRESHOLD = 0.6
 
-    def __init__(self):
+    def __init__(self, on_transcription=None):
         # Suppress harmless FP16 warning on CPU
         warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
@@ -102,6 +103,8 @@ class Transcriber:
         self.last_printed = ""
         self.previous_text = ""
         self.recent_texts = deque(maxlen=10)  # track recent utterances to avoid duplicates
+        # Callback for handling valid utterances
+        self.on_transcription = on_transcription
         self.thread = threading.Thread(target=self._process_queue)
         self.thread.start()
 
@@ -211,10 +214,12 @@ class Transcriber:
                     self.recent_texts.append(norm)
 
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    line = f"[{timestamp}] score={conf_score:.2f} latency={time.time()-start_time:.2f}s | {joined}"
+                    latency = time.time() - start_time
+                    line = f"[{timestamp}] score={conf_score:.2f} latency={latency:.2f}s | {joined}"
                     print(line)
-                    with open("transcription.txt", "a", encoding="utf-8") as f:
-                        f.write(line + "\n")
+                    # Invoke callback for storing utterance
+                    if self.on_transcription:
+                        self.on_transcription(joined, {"timestamp": timestamp, "score": conf_score, "latency": latency})
                     self.last_printed = joined
                     self.previous_text = joined
                     # Clear queue to avoid backlog duplicates

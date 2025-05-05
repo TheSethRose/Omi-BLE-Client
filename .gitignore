@@ -1,5 +1,39 @@
-recordings/
+# Ignore Docker/Postgres volumes and envs
+docker-compose.yml
+.env
+pgdata/
+python_pgdata/
+
+# Python virtual environments
 .venv/
+
+# Bytecode and cache
 devkit/
-transcription.txt
+modules/__pycache__/
+**/__pycache__/
+
+# macOS system files
+.DS_Store
+
+# Output and generated files
+output.md
+generate.py
+
+# Editor/project files
+.idea/
+.vscode/
+
+# Legacy ChromaDB
+chroma_db/
 ble_client.py
+
+# Ignore database and migration scripts
+*.sqlite3
+*.db
+
+# Git
+.git/
+.gitignore
+
+# Recordings
+recordings/

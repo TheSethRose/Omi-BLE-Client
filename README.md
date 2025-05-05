@@ -29,16 +29,46 @@ source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
 pip install -r requirements.txt
 ```
 
+### PostgreSQL + pgvector via Docker
+
+This project ships with a `docker-compose.yml` that launches a ready-to-use Postgres 16 instance with the pgvector extension pre-installed.
+
+**Note:** This project now uses port `5532` for Postgres (not the default 5432). Update your client settings accordingly.
+
+```bash
+# Start the database in the background
+docker compose up -d
+```
+
+Credentials (also stored in `.env`):
+
+| Variable | Value |
+|----------|-------|
+| POSTGRES_USER | `omi_user` |
+| POSTGRES_PASSWORD | `omi_pass` |
+| POSTGRES_DB | `omi_db` |
+| Port | `5532` |
+
+The service exposes port **5532** on localhost (container port 5432).
+
+### Environment variables
+
+Create a `.env` (already generated) or export manually:
+
+```bash
+export DATABASE_URL="postgresql://omi_user:omi_pass@localhost:5532/omi_db"
+```
+
 ## Usage
 
-1. Power on your Omi Dev Kit
-2. Run the transcription pipeline:
+1. Ensure the Postgres container is running (see above).
+2. Power on your Omi Dev Kit
+3. Run the transcription pipeline:
 ```bash
 python main.py
 ```
 
-3. Speak into the Omi Dev Kit's microphone
-4. Transcriptions will appear in real-time and be saved to `transcription.txt`
+4. Speak into the device and transcriptions will be stored in PostgreSQL with pgvector.
 
 ## Architecture
 

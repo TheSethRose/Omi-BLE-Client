@@ -7,6 +7,6 @@ bleak>=0.21.1  # For BLE communication
 opuslib>=3.0.1  # For audio decoding
 webrtcvad>=2.0.10  # For voice activity detection
 tqdm>=4.67.1  # For progress bars (disabled but required by NeMo)
-
-# Note: asyncio is part of Python standard library
-# This file was generated automatically
+psycopg2-binary>=2.9.9  # PostgreSQL client
+pydantic<2.0.0    # Required by other dependencies
+protobuf==3.20.3  # Avoid protobuf 5.x incompat with pydantic v1
