@@ -1,25 +1,60 @@
 #!/usr/bin/env python3
 """
-Omi BLE Audio Transcription Pipeline
+Transcription Orchestrator
 
-Main entry point for the BLE audio capture and transcription system.
-Connects to a Friend BLE device, captures audio, and performs real-time transcription.
+Selects capture source (BLE Omi DevKit or local microphone) based on
+CAPTURE_SOURCE env var. Streams audio to SpeechDetector -> Transcriber and
+persists utterances grouped into conversations.
 """
 
 import asyncio
 import uuid
 import os
-import sys
+from datetime import datetime
+
 from dotenv import load_dotenv
 from modules.transcription import Transcriber, SpeechDetector
-from modules.bluetooth import discover_ble_devices, connect_to_device
 from modules.database import Database
+from modules.conversation import ConversationManager
 
-# Always load .env at startup
+# ---------------------------------------------------------------------------
+# Environment & capture source selection
+# ---------------------------------------------------------------------------
 load_dotenv()
 
-async def run():
-    """Entry-point: connect to BLE device and stream speech to NVIDIA Parakeet."""
+CAPTURE_SOURCE = os.getenv("CAPTURE_SOURCE", "omi").lower()
+
+if CAPTURE_SOURCE == "omi":
+    from modules.omi.bluetooth import discover_ble_devices, connect_to_device  # type: ignore
+elif CAPTURE_SOURCE == "microphone":
+    from modules.microphone.capture import MicrophoneCapture  # type: ignore
+else:
+    raise ValueError("CAPTURE_SOURCE must be 'omi' or 'microphone'")
+
+
+# ---------------------------------------------------------------------------
+# Helper runners for each capture backend
+# ---------------------------------------------------------------------------
+async def _run_ble(detector: SpeechDetector):
+    """Discover Friend device and stream audio via BLE."""
+    device = await discover_ble_devices()
+    if device:
+        await connect_to_device(device, detector)
+    else:
+        print("No suitable BLE device found.")
+
+
+def _run_microphone(detector: SpeechDetector):
+    """Stream audio from local microphone."""
+    mic = MicrophoneCapture(detector)
+    mic.start()
+
+
+# ---------------------------------------------------------------------------
+# Main entry
+# ---------------------------------------------------------------------------
+
+def main() -> None:
     print("Loading NVIDIA Parakeet model…")
     try:
         db = Database()
@@ -28,8 +63,15 @@ async def run():
         print(f"Error connecting to database: {e}")
         return
 
-    def on_transcription(text, meta):
-        # Store each utterance with a unique ID
+    # Conversation grouping
+    conversation_manager = ConversationManager(db)
+
+    def on_transcription(text: str, meta: dict):
+        # Determine conversation ID
+        conv_id = conversation_manager.get_conversation_for_utterance(meta["timestamp"])
+        conversation_manager.update_conversation_metadata(conv_id, datetime.fromisoformat(meta["timestamp"].replace(' ', 'T')))
+        meta["conversation_id"] = conv_id
+
         rec_id = str(uuid.uuid4())
         db.create("utterances", id=rec_id, document=text, metadata=meta)
 
@@ -37,24 +79,14 @@ async def run():
     detector = SpeechDetector(transcriber)
 
     try:
-        # Discover and connect to BLE device
-        device = await discover_ble_devices()
-        if not device:
-            return
-
-        # Connect to device and start audio streaming
-        await connect_to_device(device, detector)
+        if CAPTURE_SOURCE == "omi":
+            asyncio.run(_run_ble(detector))
+        else:
+            _run_microphone(detector)
+    except KeyboardInterrupt:
+        print("Interrupted by user")
     finally:
         transcriber.stop()
-
-
-def main():
-    try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
-        print("\nScript terminated by user")
-    except Exception as e:
-        print(f"An error occurred: {e}")
 
 
 if __name__ == "__main__":
