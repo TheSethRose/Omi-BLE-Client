@@ -216,7 +216,7 @@ class Transcriber:
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     latency = time.time() - start_time
                     line = f"[{timestamp}] score={conf_score:.2f} latency={latency:.2f}s | {joined}"
-                    print(line)
+                    # print(line)
                     # Invoke callback for storing utterance
                     if self.on_transcription:
                         self.on_transcription(joined, {"timestamp": timestamp, "score": conf_score, "latency": latency})

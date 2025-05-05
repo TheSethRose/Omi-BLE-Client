@@ -22,7 +22,7 @@ class Database:
             # Fallback to env or localhost default
             self.connection_string = connection_string or os.environ.get(
                 "DATABASE_URL",
-                "postgresql://postgres:postgres@localhost:5432/postgres",
+                "postgresql://omi_user:omi_pass@localhost:5532/omi_db",
             )
             self.pool: pool.SimpleConnectionPool = pool.SimpleConnectionPool(
                 1, 10, self.connection_string
@@ -76,15 +76,58 @@ class Database:
         finally:
             self._put(conn)
 
-    # ---------------------------------------------------------------------
-    # CRUD
-    # ---------------------------------------------------------------------
-    def _ensure(self, collection):
-        if collection not in self._collections:
-            raise DatabaseError(f"Collection {collection} does not exist")
+    def _table_exists(self, table_name):
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public' AND table_name = %s
+                    )
+                """, (table_name,))
+                return cur.fetchone()[0]
+        finally:
+            self._put(conn)
+
+    def ensure_tables(self):
+        # Try to create extension and tables if missing
+        conn = self._conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                for table in self._collections:
+                    if not self._table_exists(table):
+                        print(f"[INFO] Creating missing table: {table}")
+                        cur.execute(f"""
+                            CREATE TABLE IF NOT EXISTS {table} (
+                                id TEXT PRIMARY KEY,
+                                document TEXT NOT NULL,
+                                metadata JSONB,
+                                embedding vector(1536)
+                            )
+                        """)
+                        cur.execute(f"""
+                            CREATE INDEX IF NOT EXISTS idx_{table}_embedding
+                            ON {table} USING hnsw (embedding vector_cosine_ops)
+                        """)
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"[ERROR] Failed to create tables: {e}")
+            raise DatabaseError("Failed to create tables") from e
+        finally:
+            self._put(conn)
+
+    def print_db_info(self):
+        pass
 
     def create(self, collection, id, document, metadata=None):
         self._ensure(collection)
+        # Check for table and create if missing
+        if not self._table_exists(collection):
+            # Table missing, attempt to create
+            self.ensure_tables()
         conn = self._conn()
         try:
             with conn.cursor() as cur:
@@ -99,6 +142,13 @@ class Database:
             raise DatabaseError("Create failed") from e
         finally:
             self._put(conn)
+
+    # ---------------------------------------------------------------------
+    # CRUD
+    # ---------------------------------------------------------------------
+    def _ensure(self, collection):
+        if collection not in self._collections:
+            raise DatabaseError(f"Collection {collection} does not exist")
 
     def read(self, collection, id):
         self._ensure(collection)
